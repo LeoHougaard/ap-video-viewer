@@ -51,6 +51,8 @@ Open **Add videos → Local video files**, choose a folder, and load it. The app
 
 Run server checks with `python -m unittest discover -s tests -p test_*.py -v`.
 
+GitHub Actions runs these server/persistence tests and JavaScript syntax checks on Windows and Linux with Python 3.10 for every PR and push to `main`. The real AP browser checks below remain local because they use private imported course data and external streaming services.
+
 For the browser checks, install Playwright with `npm install --no-save --package-lock=false playwright@1.61.1` and `npx playwright install chromium`. Start an isolated server with `python tests/serve.py .test-artifacts/state 8766`. Set `AP_IMPORT_FILE` to a JSON file containing a real import payload with `courseId`, `courseName`, `unit`, and `clips`, then run `node tests/browser.cjs`. Use an empty test project for each run. Tests use a headless, muted browser and leave screenshots in `.test-artifacts`. They cover real AP playback, immediate speed and cutoff changes, saved settings, unit switching, automatic advancement, the final cutoff, and narrow screens.
 
 Run `node tests/recovery.cjs` for a complete server restart and browser reopen check. It starts and stops its own server on port 8770 (`VIEWER_TEST_PORT` overrides it), uses a fresh project under `.test-artifacts`, and leaves your real project untouched. `PLAYWRIGHT_MODULE` and `CHROMIUM_PATH` can point to an existing Playwright installation and Chromium binary.
