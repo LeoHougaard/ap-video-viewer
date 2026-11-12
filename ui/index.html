@@ -1,57 +1,77 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AP video viewer</title>
+  <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
   <header class="topbar">
     <h1>AP video viewer</h1>
-    <span id="course-name"></span>
+    <button id="manage">Add videos</button>
   </header>
-  <main class="layout">
-    <section class="viewer">
-      <div class="screen">
-        <video id="video" controls playsinline></video>
-        <div id="ap-player-host" hidden></div>
-        <div id="empty-state" class="empty-state">Import an AP unit to begin.</div>
-      </div>
-      <div class="controls">
-        <div class="now-playing">
-          <span id="current-title">No video selected</span>
-          <div class="navigation">
-            <button id="previous" aria-label="Previous video" title="Previous video">←</button>
-            <button id="next" aria-label="Next video" title="Next video">→</button>
+  <main>
+    <div class="library-bar">
+      <label>Course <select id="course" aria-label="Course"></select></label>
+      <label>Unit <select id="unit" aria-label="Unit"></select></label>
+      <span id="library-feedback" class="feedback" role="status"></span>
+    </div>
+    <div class="layout">
+      <section class="viewer" aria-label="Video viewer">
+        <div class="screen">
+          <video id="video" controls playsinline muted preload="metadata" hidden></video>
+          <div id="ap-player-host" hidden></div>
+          <div id="empty-state" class="empty-state">
+            <p>Your units will appear here.</p>
+            <button id="empty-add">Add AP Classroom videos</button>
           </div>
         </div>
-        <div class="settings">
-          <label>Speed <input id="speed" type="number" min="0.1" max="16" step="0.05" value="1.5">×</label>
-          <label>Skip first <input id="trim" type="number" min="0" step="0.1" value="0"> sec</label>
-          <button id="set-playhead">Set to current time</button>
-          <span id="trim-feedback" class="feedback"></span>
+        <div class="now-playing"><h2 id="current-title">Choose a unit to begin</h2><a id="original" target="_blank" rel="noopener" hidden>AP Classroom</a></div>
+        <div class="transport">
+          <button id="previous" aria-label="Previous video" title="Previous video">&#8592;</button>
+          <button id="play" class="primary">Play</button>
+          <button id="next" aria-label="Next video" title="Next video">&#8594;</button>
+          <span id="clock" class="clock">0:00 / 0:00</span>
+          <label class="speed-label">Speed <input id="speed" type="number" min="0.25" max="16" step="0.05" value="1.5" aria-label="Playback speed">&#215;</label>
         </div>
-      </div>
-    </section>
-    <aside class="sidebar">
-      <div class="import">
-        <p>Save the importer as a bookmark. Drag the link onto your bookmarks toolbar, or copy its URL into a new bookmark. Open an AP video, then click that bookmark.</p>
-        <div class="import-actions"><a id="import-unit" href="#" title="Drag this link to your bookmarks toolbar">AP unit importer</a><button id="copy-import">Copy bookmark URL</button></div>
-        <span id="ap-feedback" class="feedback"></span>
-      </div>
-      <details id="local-options">
-        <summary>Use local video files</summary>
-        <div class="local-content">
-          <div class="folder-row"><input id="folder" type="text" placeholder="Video folder path" aria-label="Video folder path"><button id="browse">Browse</button></div>
-          <div class="folder-row"><button id="use-folder">Load folder</button><button id="export">Export one MP4</button></div>
-          <span id="folder-feedback" class="feedback"></span>
-          <span id="export-status" class="feedback"></span>
+        <input id="seek" class="seek" type="range" min="0" max="1" step="0.1" value="0" aria-label="Video position" disabled>
+        <div class="cuts">
+          <div class="cut">
+            <div class="cut-heading"><label for="trim">Start</label><input id="trim" type="text" inputmode="decimal" value="0:00" aria-label="Start cutoff" spellcheck="false"><button id="set-start" title="Start at the current video position">Use current</button></div>
+            <input id="start-range" type="range" min="0" max="1" step="0.1" value="0" aria-label="Start cutoff slider" disabled>
+          </div>
+          <div class="cut">
+            <div class="cut-heading"><label for="end">End</label><input id="end" type="text" inputmode="decimal" placeholder="Full video" aria-label="End cutoff" spellcheck="false"><button id="set-end" title="End at the current video position">Use current</button></div>
+            <input id="end-range" type="range" min="0" max="1" step="0.1" value="1" aria-label="End cutoff slider" disabled>
+          </div>
         </div>
-      </details>
-      <div class="queue-heading"><strong>Queue <span id="clip-count">0</span></strong><button id="refresh">Refresh</button></div>
-      <div id="playlist" class="playlist"></div>
-    </aside>
+        <div class="cut-footer"><span id="cut-summary">Cutoffs apply as you watch.</span><button id="reset">Reset cutoffs</button></div>
+        <div class="status-line"><span id="player-feedback" class="feedback" role="status"></span><span id="save-feedback" class="feedback" role="status"></span></div>
+      </section>
+      <aside class="sidebar" aria-label="Unit videos">
+        <div class="queue-heading"><h2>Videos <span id="clip-count">0</span></h2><button id="refresh">Refresh</button></div>
+        <div id="playlist" class="playlist"></div>
+      </aside>
+    </div>
+    <dialog id="add-dialog" aria-labelledby="add-title">
+      <div class="dialog-heading"><h2 id="add-title">Add videos</h2><button id="close-dialog" aria-label="Close add videos">&#215;</button></div>
+      <p>Add a course once. Then choose any of its units in the viewer.</p>
+      <ol>
+        <li>Drag <a id="import-course" class="bookmark" href="#">Add to AP viewer</a> to your bookmarks bar. Or <button id="copy-import" class="text-button">copy bookmark URL</button> and save it as a bookmark.</li>
+        <li><a href="https://apclassroom.collegeboard.org/" target="_blank" rel="noopener">Open AP Classroom</a>, sign in, and open a video in your course.</li>
+        <li>Click the saved <strong>Add to AP viewer</strong> bookmark. This viewer opens with the course's units ready to choose.</li>
+      </ol>
+      <p class="hint">In Zen, Chrome, Edge, or Firefox, Ctrl+Shift+B shows the bookmarks bar. Run the bookmark on the AP Classroom page.</p>
+      <span id="ap-feedback" class="feedback" role="status"></span>
+      <details><summary>Local video files</summary><div class="local-content">
+        <label for="folder">Video folder</label>
+        <div class="folder-row"><input id="folder" type="text" placeholder="Paste a folder path"><button id="browse">Browse</button></div>
+        <div class="folder-row"><button id="use-folder">Load folder</button><button id="export">Export one MP4</button></div>
+        <span id="folder-feedback" class="feedback" role="status"></span><span id="export-status" class="feedback" role="status"></span>
+      </div></details>
+    </dialog>
   </main>
   <script src="https://fast.wistia.com/player.js" async></script>
   <script src="/app.js"></script>
