@@ -33,16 +33,38 @@ def natural_key(value: str):
     return [(1, int(x)) if x.isdigit() else (0, x.casefold()) for x in re.split(r"(\d+)", value)]
 
 
-def read_project():
+def read_store():
     if PROJECT.exists():
-        return json.loads(PROJECT.read_text(encoding="utf-8"))
-    return {"source": "files", "folder": str(VIDEOS), "items": []}
+        data = json.loads(PROJECT.read_text(encoding="utf-8"))
+        if "libraries" in data:
+            return data
+        if data.get("source") == "ap":
+            groups = {}
+            for item in data.get("items", []):
+                course = urlsplit(item["apUrl"]).path.strip("/").split("/")[0]
+                key = f"ap:{course}:{item['unit']}"
+                groups.setdefault(key, {"source": "ap", "courseId": course, "courseName": data.get("courseName", "AP Classroom"), "unit": item["unit"], "items": []})["items"].append(item)
+            if groups:
+                return {"activeLibrary": next(iter(groups)), "libraries": groups}
+        return {"activeLibrary": "files", "libraries": {"files": data}}
+    return {"activeLibrary": "files", "libraries": {"files": {"source": "files", "folder": str(VIDEOS), "items": []}}}
+
+
+def read_project():
+    store = read_store()
+    return store["libraries"][store["activeLibrary"]]
+
+
+def write_store(store):
+    temporary = PROJECT.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(store, indent=2), encoding="utf-8")
+    temporary.replace(PROJECT)
 
 
 def write_project(project):
-    temporary = PROJECT.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(project, indent=2), encoding="utf-8")
-    temporary.replace(PROJECT)
+    store = read_store()
+    store["libraries"][store["activeLibrary"]] = project
+    write_store(store)
 
 
 def scan_project():
@@ -51,7 +73,7 @@ def scan_project():
         return None, [
             {
                 "id": item["id"], "path": item["name"], "name": item["name"],
-                "unit": item["unit"], "trim": item.get("trim", 0),
+                "unit": item["unit"], "trim": item.get("trim", 0), "end": item.get("end"),
                 "apUrl": item["apUrl"], "source": "ap", "browserPlayable": True,
             }
             for item in project.get("items", [])
@@ -80,6 +102,7 @@ def scan_project():
             "path": relative,
             "name": Path(relative).stem,
             "trim": trim,
+            "end": previous.get(relative, {}).get("end"),
             "url": f"/media/{clip_id}",
             "browserPlayable": Path(relative).suffix.lower() in {".mp4", ".m4v", ".webm"},
             "source": "files",
@@ -125,10 +148,11 @@ def export_video(folder, clips):
             path = folder / clip["path"]
             duration, has_audio = probe_video(ffprobe, path)
             trim = float(clip["trim"])
-            if trim >= duration:
+            end = min(float(clip["end"]), duration) if clip.get("end") is not None else duration
+            if trim >= end:
                 raise RuntimeError(f"Trim reaches the end of {clip['path']} ({duration:.1f}s).")
-            args += ["-ss", str(trim), "-i", str(path)]
-            info.append((duration - trim, has_audio))
+            args += ["-ss", str(trim), "-t", str(end - trim), "-i", str(path)]
+            info.append((end - trim, has_audio))
         for remaining, has_audio in info:
             if not has_audio:
                 args += ["-f", "lavfi", "-t", str(remaining), "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"]
@@ -197,7 +221,9 @@ class Handler(BaseHTTPRequestHandler):
                     folder, clips = scan_project()
                     project = read_project()
                     status = export_status.copy()
-                return self.send_json({"app": "ap-video-viewer", "source": project.get("source", "files"), "courseName": project.get("courseName", ""), "folder": str(folder) if folder else "", "clips": clips, "export": status})
+                    store = read_store()
+                    libraries = [{"id": key, "source": value.get("source", "files"), "courseName": value.get("courseName", "Local videos"), "courseId": value.get("courseId", "files"), "unit": value.get("unit", ""), "count": len(value.get("items", []))} for key, value in store["libraries"].items()]
+                return self.send_json({"app": "ap-video-viewer", "libraryId": store["activeLibrary"], "libraries": libraries, "source": project.get("source", "files"), "courseName": project.get("courseName", ""), "folder": str(folder) if folder else "", "clips": clips, "export": status})
             if route == "/api/export":
                 with lock:
                     status = export_status.copy()
@@ -217,6 +243,8 @@ class Handler(BaseHTTPRequestHandler):
             folder, clips = scan_project()
         clip = next((item for item in clips if item["id"] == clip_id), None)
         if clip is None:
+            return self.send_error(404)
+        if folder is None:
             return self.send_error(404)
         path = folder / clip["path"]
         size = path.stat().st_size
@@ -260,6 +288,15 @@ class Handler(BaseHTTPRequestHandler):
         global export_status
         route = urlsplit(self.path).path
         try:
+            if route == "/api/select":
+                key = self.body().get("libraryId")
+                with lock:
+                    store = read_store()
+                    if key not in store["libraries"]:
+                        raise ValueError("This unit is no longer in the library. Refresh and try again.")
+                    store["activeLibrary"] = key
+                    write_store(store)
+                return self.send_json({"ok": True})
             if route == "/api/folder":
                 raw = self.body().get("folder", "").strip()
                 if not raw:
@@ -271,11 +308,11 @@ class Handler(BaseHTTPRequestHandler):
                 if not folder.is_dir():
                     raise ValueError("Choose an existing folder.")
                 with lock:
-                    project = read_project()
-                    project["source"] = "files"
-                    project["folder"] = str(folder)
-                    project["items"] = []
-                    write_project(project)
+                    store = read_store()
+                    old = store["libraries"].get("files", {})
+                    store["libraries"]["files"] = {"source": "files", "folder": str(folder), "items": old.get("items", []) if old.get("folder") == str(folder) else []}
+                    store["activeLibrary"] = "files"
+                    write_store(store)
                 return self.send_json({"ok": True})
             if route == "/api/ap-import":
                 payload = self.body()
@@ -284,10 +321,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not re.fullmatch(r"\d{1,4}", course_id) or not isinstance(imported, list) or not 0 < len(imported) <= 1000:
                     raise ValueError("Open an AP Classroom video, then use the import bookmarklet.")
                 with lock:
-                    old = read_project()
-                    trims = {item.get("id"): item.get("trim", 0) for item in old.get("items", [])} if old.get("source") == "ap" else {}
-                    old_order = {item.get("id"): i for i, item in enumerate(old.get("items", []))} if old.get("source") == "ap" else {}
-                    items = []
+                    store = read_store()
+                    groups = {}
                     seen = set()
                     for clip in imported:
                         clip_id = str(clip.get("id", ""))
@@ -298,14 +333,26 @@ class Handler(BaseHTTPRequestHandler):
                         if clip_id in seen:
                             continue
                         seen.add(clip_id)
-                        items.append({
-                            "id": clip_id, "unit": unit, "name": name, "trim": trims.get(clip_id, 0),
+                        groups.setdefault(unit, []).append({
+                            "id": clip_id, "unit": unit, "name": name,
                             "apUrl": f"https://apclassroom.collegeboard.org/{course_id}/home?apd={clip_id}&unit={unit}",
                         })
-                    incoming_order = {item["id"]: i for i, item in enumerate(items)}
-                    items.sort(key=lambda item: (0, old_order[item["id"]]) if item["id"] in old_order else (1, incoming_order[item["id"]]))
-                    write_project({"source": "ap", "courseName": str(payload.get("courseName", "AP Classroom"))[:100], "items": items})
-                return self.send_json({"ok": True, "count": len(items)})
+                    for unit, items in groups.items():
+                        key = f"ap:{course_id}:{unit}"
+                        old = store["libraries"].get(key, {}).get("items", [])
+                        saved = {item["id"]: item for item in old}
+                        order = {item["id"]: i for i, item in enumerate(old)}
+                        for item in items:
+                            prior = saved.get(item["id"], {})
+                            item.update(trim=prior.get("trim", 0), end=prior.get("end"))
+                        items.sort(key=lambda item: order.get(item["id"], len(order)))
+                        store["libraries"][key] = {"source": "ap", "courseId": course_id, "courseName": str(payload.get("courseName", "AP Classroom"))[:100], "unit": unit, "items": items}
+                    active_unit = str(payload.get("unit", ""))
+                    if active_unit not in groups:
+                        active_unit = min(groups, key=int)
+                    store["activeLibrary"] = f"ap:{course_id}:{active_unit}"
+                    write_store(store)
+                return self.send_json({"ok": True, "count": len(seen), "units": len(groups)})
             if route == "/api/choose-folder":
                 import tkinter as tk
                 from tkinter import filedialog
@@ -318,8 +365,11 @@ class Handler(BaseHTTPRequestHandler):
                     root.destroy()
                 return self.send_json({"folder": folder})
             if route == "/api/project":
-                submitted = self.body().get("items", [])
+                payload = self.body()
+                submitted = payload.get("items", [])
                 with lock:
+                    if payload.get("libraryId") != read_store()["activeLibrary"]:
+                        raise ValueError("The selected unit changed in another tab. Refresh before saving.")
                     folder, clips = scan_project()
                     by_id = {clip["id"]: clip for clip in clips}
                     if len(submitted) != len(clips) or {item.get("id") for item in submitted} != set(by_id):
@@ -329,11 +379,16 @@ class Handler(BaseHTTPRequestHandler):
                         trim = float(item.get("trim", 0))
                         if not math.isfinite(trim) or not 0 <= trim < 86400 or round(trim, 3) != trim:
                             raise ValueError("Trim must be a number of seconds between 0 and 86400, with up to 3 decimals.")
+                        end = item.get("end")
+                        if end is not None:
+                            end = float(end)
+                            if not math.isfinite(end) or not trim < end < 86400 or round(end, 3) != end:
+                                raise ValueError("End must be after the start, in seconds. Leave it blank for the full video.")
                         clip = by_id[item["id"]]
                         if folder:
-                            items.append({"path": clip["path"], "trim": trim})
+                            items.append({"path": clip["path"], "trim": trim, "end": end})
                         else:
-                            items.append({"id": clip["id"], "name": clip["name"], "unit": clip["unit"], "apUrl": clip["apUrl"], "trim": trim})
+                            items.append({"id": clip["id"], "name": clip["name"], "unit": clip["unit"], "apUrl": clip["apUrl"], "trim": trim, "end": end})
                     project = read_project()
                     project["items"] = items
                     write_project(project)

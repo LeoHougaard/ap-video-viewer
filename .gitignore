@@ -2,3 +2,10 @@ __pycache__/
 project.json
 videos/
 exports/
+.test-artifacts/
+*.log
+recovered-import.json
+node_modules/
+output/
+tmp/
+project.json.tmp
